@@ -62,6 +62,7 @@ class _ShoppinglistPageState extends State<ShoppinglistPage> {
                 },
                 child: SearchTextField(
                   controller: searchController,
+                  searchDelay: 100,
                   onSearch: (s) => cubit.search(s),
                   onSubmitted: () {
                     final state = cubit.state;

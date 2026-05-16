@@ -118,40 +118,61 @@ class ShoppinglistCubit extends Cubit<ShoppinglistCubitState> {
   }
 
   Future<void> search(String query) {
-    final current = state;
-    if (current is SearchShoppinglistCubitState &&
-        current.query.isNotEmpty &&
-        query != current.query) {
-      final (oldName, _) = _splitQuery(current.query);
-      final (newName, newDescription) = _splitQuery(query);
-      // Prefix extension: the new result set is a subset of the previous one,
-      // so filter locally for instant feedback while the network refresh runs.
-      if (oldName.isNotEmpty &&
-          newName.toLowerCase().startsWith(oldName.toLowerCase())) {
-        final lowerNewName = newName.toLowerCase();
-        final filtered = current.result
-            .where((e) => e.name.toLowerCase().contains(lowerNewName))
-            .toList();
-        if (newName.isNotEmpty &&
-            !filtered
-                .any((e) => e.name.toLowerCase() == lowerNewName)) {
-          filtered.add(ItemWithDescription(
-            name: newName,
-            description: newDescription ?? '',
-          ));
-        }
-        emit(SearchShoppinglistCubitState(
-          shoppinglists: current.shoppinglists,
-          selectedShoppinglistId: current.selectedShoppinglistId,
-          result: filtered,
-          query: query,
-          categories: current.categories,
-          sorting: current.sorting,
-          selectedListItems: current.selectedListItems,
-        ));
-      }
+    if (query.isNotEmpty) {
+      _emitLocalSearchPreview(query);
     }
     return refresh(query: query);
+  }
+
+  /// Emit instant search results from cached data so the UI updates without
+  /// waiting on the network. The real refresh runs afterwards and replaces
+  /// this state with the authoritative server-side results.
+  void _emitLocalSearchPreview(String query) {
+    final current = state;
+    final (queryName, queryDescription) = _splitQuery(query);
+    if (queryName.isEmpty) return;
+    final lowerName = queryName.toLowerCase();
+
+    // Pick the narrowest available source:
+    // - Prefix extension of the previous search → filter previous results.
+    // - Otherwise → filter cached items + recent items of the current list.
+    List<Item>? pool;
+    if (current is SearchShoppinglistCubitState) {
+      if (current.query == query) return;
+      final (oldName, _) = _splitQuery(current.query);
+      if (oldName.isNotEmpty &&
+          lowerName.startsWith(oldName.toLowerCase())) {
+        pool = current.result;
+      }
+    }
+    if (pool == null) {
+      final shoppinglist = current.selectedShoppinglist;
+      if (shoppinglist == null) return;
+      pool = [
+        ...shoppinglist.recentItems,
+        ...shoppinglist.items,
+      ];
+    }
+
+    final filtered = pool
+        .where((e) => e.name.toLowerCase().contains(lowerName))
+        .toList();
+    if (!filtered.any((e) => e.name.toLowerCase() == lowerName)) {
+      filtered.add(ItemWithDescription(
+        name: queryName,
+        description: queryDescription ?? '',
+      ));
+    }
+
+    emit(SearchShoppinglistCubitState(
+      shoppinglists: current.shoppinglists,
+      selectedShoppinglistId: current.selectedShoppinglistId,
+      result: filtered,
+      query: query,
+      categories: current.categories,
+      sorting: current.sorting,
+      selectedListItems: current.selectedListItems,
+    ));
   }
 
   Future<void> add(Item item) async {
