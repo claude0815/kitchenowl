@@ -31,6 +31,25 @@ jobs:
       - run: flutter packages get
         working-directory: kitchenowl
 
+      # The release build requires a signing config (see android/app/build.gradle).
+      # Generate a throwaway keystore so the build succeeds without Play Store
+      # secrets — the resulting APK is sideloadable but not upgrade-compatible
+      # with Play Store releases (different signing key).
+      - name: Generate ad-hoc keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore app/sideload-keystore.jks \
+            -storepass sideload -keypass sideload \
+            -alias sideload -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=KitchenOwl Sideload,O=KitchenOwl,C=US"
+          {
+            echo "storeFile=sideload-keystore.jks"
+            echo "keyAlias=sideload"
+            echo "storePassword=sideload"
+            echo "keyPassword=sideload"
+          } > key.properties
+        working-directory: kitchenowl/android
+
       - name: Build APK
         run: |
           if [[ "$SPLIT" == "true" ]]; then
