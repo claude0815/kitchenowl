@@ -117,19 +117,81 @@ class ShoppinglistCubit extends Cubit<ShoppinglistCubitState> {
     removeLocally(item, data["shoppinglist"]["id"]);
   }
 
-  Future<void> search(String query) => refresh(query: query);
+  Future<void> search(String query) {
+    final current = state;
+    if (current is SearchShoppinglistCubitState &&
+        current.query.isNotEmpty &&
+        query != current.query) {
+      final (oldName, _) = _splitQuery(current.query);
+      final (newName, newDescription) = _splitQuery(query);
+      // Prefix extension: the new result set is a subset of the previous one,
+      // so filter locally for instant feedback while the network refresh runs.
+      if (oldName.isNotEmpty &&
+          newName.toLowerCase().startsWith(oldName.toLowerCase())) {
+        final lowerNewName = newName.toLowerCase();
+        final filtered = current.result
+            .where((e) => e.name.toLowerCase().contains(lowerNewName))
+            .toList();
+        if (newName.isNotEmpty &&
+            !filtered
+                .any((e) => e.name.toLowerCase() == lowerNewName)) {
+          filtered.add(ItemWithDescription(
+            name: newName,
+            description: newDescription ?? '',
+          ));
+        }
+        emit(SearchShoppinglistCubitState(
+          shoppinglists: current.shoppinglists,
+          selectedShoppinglistId: current.selectedShoppinglistId,
+          result: filtered,
+          query: query,
+          categories: current.categories,
+          sorting: current.sorting,
+          selectedListItems: current.selectedListItems,
+        ));
+      }
+    }
+    return refresh(query: query);
+  }
 
   Future<void> add(Item item) async {
     final _state = state;
     addLocally(ShoppinglistItem.fromItem(item: item));
     if (_state.selectedShoppinglist == null) return;
+
+    // Leave the search state immediately so the search field clears and the
+    // user is back on the list view without waiting on the network round-trip.
+    if (state is SearchShoppinglistCubitState) {
+      final current = state;
+      emit(ShoppinglistCubitState(
+        shoppinglists: current.shoppinglists,
+        selectedShoppinglistId: current.selectedShoppinglistId,
+        categories: current.categories,
+        sorting: current.sorting,
+        selectedListItems: current.selectedListItems,
+      ));
+    }
+
     await TransactionHandler.getInstance()
         .runTransaction(TransactionShoppingListAddItem(
       household: household,
       shoppinglist: _state.selectedShoppinglist!,
       item: item,
     ));
-    await refresh(query: '');
+    // Background refresh: WebSocket events normally keep state in sync, but
+    // this catches up if the socket is unavailable. No await — UI stays snappy.
+    refresh(query: '');
+  }
+
+  (String, String?) _splitQuery(String query) {
+    final splitIndex = query.indexOf(',');
+    if (splitIndex >= 0) {
+      return (
+        query.substring(0, splitIndex).trim(),
+        query.substring(splitIndex + 1).trim(),
+      );
+    }
+    return (query.trim(), null);
   }
 
   void addLocally(ShoppinglistItem item, [int? shoppinglistId]) {
@@ -425,14 +487,7 @@ class ShoppinglistCubit extends Cubit<ShoppinglistCubitState> {
     Future<List<Category>> categories = fetchCategories();
 
     if (query != null && query.isNotEmpty) {
-      // Split query into name and description
-      final splitIndex = query.indexOf(',');
-      String queryName = query.trim();
-      String? queryDescription;
-      if (splitIndex >= 0) {
-        queryName = query.substring(0, splitIndex).trim();
-        queryDescription = query.substring(splitIndex + 1).trim();
-      }
+      final (queryName, queryDescription) = _splitQuery(query);
 
       Future<List<Item>> searchItems = TransactionHandler.getInstance()
           .runTransaction(
